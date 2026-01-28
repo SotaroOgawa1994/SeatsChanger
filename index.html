@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>席替えマエストロ - 教員向け席替え支援アプリ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        /* 基本的なリセットとフォント設定 */
+        body { font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; }
+    </style>
+    <!-- Import Map: Reactとライブラリをブラウザで直接読み込むための設定 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 h-screen w-full overflow-hidden">
+    <div id="root" class="h-full w-full"></div>
+
+    <!-- アプリケーションのロジック -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Users, Settings, LayoutGrid, Brain, RefreshCw, Save, 
+            AlertTriangle, CheckCircle, Search, ArrowRightLeft,
+            UserCheck, AlertCircle, Info, Trash2, Plus, GripVertical, History, Edit3, XCircle, AlertOctagon, MapPin, CheckSquare, Square, Eye, EyeOff, Clock, Move, Lock, Unlock, Star, Loader2, Cloud, HardDrive,
+            Undo2, Redo2, MessageCircle, BarChart3, Users2, ChevronUp, ChevronDown, ZoomIn, ZoomOut, RotateCcw, ListOrdered, Download, Upload
+        } from 'lucide-react';
+
+        // --- 定数定義 ---
+        const PRIORITIES = {
+            ABSOLUTE: { id: 'absolute', label: 'ぜったい', color: 'bg-red-500', text: 'text-red-700', bgAlert: 'bg-red-200', border: 'border-red-500', score: 10000, deduction: 100 },
+            PREFERRED: { id: 'preferred', label: 'なるべく', color: 'bg-orange-500', text: 'text-orange-700', bgAlert: 'bg-orange-200', border: 'border-orange-500', score: 100, deduction: 20 },
+            OPTIONAL: { id: 'optional', label: 'できれば', color: 'bg-yellow-400', text: 'text-yellow-700', bgAlert: 'bg-yellow-100', border: 'border-yellow-400', score: 10, deduction: 5 },
+        };
+
+        const RULE_ORDER = [
+            'individualRange',
+            'genderBalance',
+            'discussionBalance',
+            'groupDiscussionBalance',
+            'badPairs',
+            'historyAvoid',
+            'historyFrontBackAvoid',
+            'historySeatAvoid',
+            'historyDistanceAvoid'
+        ];
+
+        const HEATMAP_COLORS = {
+            1: 'bg-slate-100 border-slate-300 text-slate-600',
+            2: 'bg-orange-50 border-orange-200 text-orange-700',
+            3: 'bg-orange-100 border-orange-300 text-orange-800',
+            4: 'bg-orange-200 border-orange-400 text-orange-900',
+            5: 'bg-orange-400 border-orange-500 text-white',
+        };
+
+        // --- ヘルパー関数 ---
+        const generateInitialStudents = () => {
+            const nameList = [
+                { name: '佐藤 翔太', gender: 'M' }, { name: '鈴木 陽菜', gender: 'F' },
+                { name: '高橋 大翔', gender: 'M' }, { name: '田中 結菜', gender: 'F' },
+                { name: '伊藤 蓮', gender: 'M' }, { name: '渡辺 莉子', gender: 'F' },
+                { name: '山本 蒼', gender: 'M' }, { name: '中村 結愛', gender: 'F' },
+                { name: '小林 樹', gender: 'M' }, { name: '加藤 紬', gender: 'F' },
+                { name: '吉田 陽太', gender: 'M' }, { name: '山田 芽依', gender: 'F' },
+                { name: '佐々木 陸', gender: 'M' }, { name: '山口 咲良', gender: 'F' },
+                { name: '松本 湊', gender: 'M' }, { name: '井上 美月', gender: 'F' },
+                { name: '木村 悠真', gender: 'M' }, { name: '林 結衣', gender: 'F' },
+                { name: '斎藤 大和', gender: 'M' }, { name: '清水 澪', gender: 'F' },
+                { name: '山崎 瑛太', gender: 'M' }, { name: '森 心春', gender: 'F' },
+                { name: '池田 陽斗', gender: 'M' }, { name: '橋本 杏奈', gender: 'F' },
+                { name: '阿部 朝陽', gender: 'M' }, { name: '石川 さくら', gender: 'F' },
+                { name: '山下 颯太', gender: 'M' }, { name: '中島 凜', gender: 'F' },
+                { name: '石井 悠人', gender: 'M' }, { name: '小川 琴音', gender: 'F' },
+            ];
+            const students = [];
+            for (let i = 0; i < 30; i++) {
+                const data = nameList[i % nameList.length];
+                const hasConstraint = Math.random() > 0.9;
+                const allowedSeats = [];
+                if (hasConstraint) {
+                    for(let c=0; c<6; c++) allowedSeats.push(`0-${c}`);
+                }
+                students.push({
+                    id: `s-${i + 1}`,
+                    name: data.name,
+                    gender: data.gender,
+                    academic: Math.floor(Math.random() * 5) + 1,
+                    discussionLevel: Math.floor(Math.random() * 5) + 1,
+                    useRestriction: hasConstraint,
+                    allowedSeats: allowedSeats,
+                    fixedSeat: null,
+                    badPairs: [],
+                });
+            }
+            return students;
+        };
+
+        // --- カスタムフック: LocalStorage同期State ---
+        function usePersistentState(key, initialValue) {
+            const storageKey = `seating-app-v1-${key}`;
+            const [state, setState] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(storageKey);
+                    if (item) {
+                        return JSON.parse(item);
+                    }
+                    const value = initialValue instanceof Function ? initialValue() : initialValue;
+                    window.localStorage.setItem(storageKey, JSON.stringify(value));
+                    return value;
+                } catch (error) {
+                    console.error(`Error reading localStorage key "${storageKey}":`, error);
+                    return initialValue instanceof Function ? initialValue() : initialValue;
+                }
+            });
+
+            const setPersistState = useCallback((newValue) => {
+                setState(prevState => {
+                    const nextState = newValue instanceof Function ? newValue(prevState) : newValue;
+                    try {
+                        window.localStorage.setItem(storageKey, JSON.stringify(nextState));
+                    } catch (error) {
+                        console.error(`Error saving localStorage key "${storageKey}":`, error);
+                    }
+                    return nextState;
+                });
+            }, [storageKey]);
+
+            return [state, setPersistState, false];
+        }
+
+        // --- サブコンポーネント: Seat ---
+        const Seat = React.memo(({ 
+            r, c, seatId, student, isDisabled, hasAisleRight, 
+            isSelected, isDragSource, violations, showViolations,
+            isEditMode, isSimulating, isPreviewMode, prediction, score,
+            viewMode, groupId, attendanceNumber,
+            onClick, onDragStart, onDragOver, onDrop 
+        }) => {
+            const isLocked = student && student.fixedSeat === seatId;
+
+            let bgColor = 'bg-white';
+            let borderColor = isSelected ? 'border-blue-600 ring-2 ring-blue-300' : 'border-gray-300';
+            let opacity = isDragSource ? 'opacity-40' : 'opacity-100';
+            let textColor = 'text-gray-800';
+
+            const isHeatmap = viewMode === 'heatmap' && student;
+
+            if (isDisabled) {
+                bgColor = 'bg-gray-100';
+                borderColor = 'border-transparent';
+                opacity = 'opacity-50';
+            } else if (isLocked) {
+                bgColor = 'bg-gray-300';
+                borderColor = isSelected ? 'border-gray-600 ring-2 ring-gray-400' : 'border-gray-400';
+                textColor = 'text-gray-700';
+            } else if (prediction && !isEditMode && !isPreviewMode) {
+                if (prediction === 'safe') {
+                    bgColor = 'bg-emerald-50'; 
+                    borderColor = 'border-emerald-300';
+                } else {
+                    const p = PRIORITIES[prediction.toUpperCase()];
+                    if (p) {
+                        bgColor = p.bgAlert;
+                        borderColor = p.border;
+                    }
+                }
+                if (isSelected) bgColor = 'bg-blue-100';
+            } else if (isHeatmap) {
+                const colorClass = HEATMAP_COLORS[student.discussionLevel] || HEATMAP_COLORS[3];
+                bgColor = colorClass.split(' ')[0];
+                borderColor = colorClass.split(' ')[1];
+                textColor = colorClass.split(' ')[2];
+                if (isSelected) {
+                    borderColor = 'border-blue-600 ring-2 ring-blue-300';
+                }
+            } else {
+                let worstViolation = null;
+                if (showViolations && violations && violations.length > 0 && !isPreviewMode) {
+                    worstViolation = violations.reduce((prev, curr) => {
+                        const pOrder = { 'absolute': 3, 'preferred': 2, 'optional': 1 };
+                        const prevScore = pOrder[prev.priority] || 0;
+                        const currScore = pOrder[curr.priority] || 0;
+                        return currScore > prevScore ? curr : prev;
+                    });
+                }
+
+                if (worstViolation) {
+                    const pKey = worstViolation.priority.toUpperCase();
+                    const p = PRIORITIES[pKey];
+                    if (p) {
+                        bgColor = p.bgAlert;
+                        if (!isSelected) borderColor = p.border;
+                    }
+                } else if (student) {
+                    bgColor = 'bg-blue-50';
+                }
+                
+                if (isSelected) {
+                    if (!worstViolation) bgColor = 'bg-blue-100';
+                }
+            }
+
+            const hasRangeConstraint = student && student.useRestriction;
+
+            return (
+                <div className={`relative flex flex-col items-center justify-center ${hasAisleRight ? 'mr-12' : 'mr-2'}`} style={{ width: '7rem', height: '6rem' }}>
+                    {hasAisleRight && (
+                        <div className="absolute -right-8 top-0 bottom-0 w-4 flex flex-col justify-center items-center">
+                            <div className="h-full border-r border-dashed border-gray-300"></div>
+                            <span className="text-[8px] text-gray-400 bg-gray-50 px-1 absolute">通路</span>
+                        </div>
+                    )}
+
+                    <div 
+                        draggable={!isDisabled && !isEditMode && !isSimulating && !isPreviewMode && !!student && !isLocked}
+                        onDragStart={(e) => onDragStart(e, seatId)}
+                        onDragOver={(e) => onDragOver(e, seatId)}
+                        onDrop={(e) => onDrop(e, seatId)}
+                        onClick={() => onClick(seatId)}
+                        className={`
+                            h-full w-full rounded-lg border-2 shadow-sm transition-all select-none group relative
+                            flex flex-col items-center justify-center p-1
+                            ${bgColor} ${borderColor} ${opacity}
+                            ${!isDisabled && !isEditMode && !isPreviewMode && !isLocked ? 'cursor-grab active:cursor-grabbing hover:shadow-md' : ''}
+                            ${isEditMode ? 'cursor-pointer hover:opacity-80' : ''}
+                            ${isEditMode && isDisabled ? 'ring-2 ring-gray-400' : ''}
+                            ${(isPreviewMode || isLocked) && !isEditMode ? 'cursor-default' : ''}
+                            ${score !== undefined ? 'ring-2 ring-offset-1 ring-blue-200' : ''}
+                        `}
+                    >
+                        <span className="absolute top-1 left-2 text-[10px] text-gray-400 font-mono font-bold">
+                            {student && attendanceNumber ? `No.${attendanceNumber}` : `${r+1}-${c+1}`}
+                        </span>
+                        
+                        {groupId > 0 && !isDisabled && (
+                            <div className={`absolute -top-2 -left-2 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white bg-green-600 border border-white shadow-sm z-20`}>
+                                {groupId}
+                            </div>
+                        )}
+
+                        {isEditMode && isDisabled && <XCircle className="w-8 h-8 text-gray-400 absolute opacity-50" />}
+                        {isLocked && !isDisabled && <Lock className="absolute top-1 right-1 w-3 h-3 text-gray-500" />}
+                        
+                        {score !== undefined && !isLocked && !isEditMode && !isPreviewMode && (
+                            <div className={`absolute -top-3 -right-3 z-30 font-bold text-xs px-2 py-1 rounded-full border-2 shadow-md flex items-center justify-center min-w-[2rem]
+                                ${score === 100 ? 'bg-yellow-400 text-white border-white scale-110' : 
+                                score >= 80 ? 'bg-emerald-500 text-white border-white' : 
+                                score >= 50 ? 'bg-orange-400 text-white border-white' : 
+                                'bg-red-500 text-white border-white'}
+                            `} title="移動先スコア（100点満点）">
+                                {score}
+                            </div>
+                        )}
+
+                        {!isDisabled && student ? (
+                            <>
+                                <div className={`text-center leading-none z-10 pointer-events-none ${textColor}`}>
+                                    <span className="block text-sm md:text-base font-normal opacity-70 mb-0.5">{student.name.split(' ')[0]}</span>
+                                    <span className="block text-xl md:text-3xl font-bold">{student.name.split(' ')[1]}</span>
+                                </div>
+                                
+                                <div className="flex gap-0.5 mt-1 absolute bottom-1">
+                                    {hasRangeConstraint && <MapPin className="w-3 h-3 text-indigo-500" title="座席範囲指定あり" />}
+                                    {isHeatmap && (
+                                        <div className="flex items-center gap-0.5 bg-white/80 px-1 rounded text-[10px] border border-gray-200">
+                                            <MessageCircle className="w-2.5 h-2.5" />
+                                            {student.discussionLevel}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {showViolations && violations && violations.length > 0 && !isEditMode && !isPreviewMode && !isLocked && !prediction && (
+                                    <div className="absolute -top-2 -right-2 z-20">
+                                        {(() => {
+                                            const worst = violations.reduce((p, c) => (PRIORITIES[c.priority.toUpperCase()]?.score > PRIORITIES[p.priority.toUpperCase()]?.score) ? c : p);
+                                            const pConf = PRIORITIES[worst.priority.toUpperCase()];
+                                            return pConf ? <AlertCircle className={`w-5 h-5 fill-white ${pConf.text}`} /> : null;
+                                        })()}
+                                    </div>
+                                )}
+                                {showViolations && violations && violations.length > 0 && !isEditMode && !isPreviewMode && !isLocked && !prediction && (
+                                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-56 bg-gray-800 text-white text-xs rounded p-2 opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity shadow-lg">
+                                        <ul className="list-disc list-inside space-y-1">
+                                            {violations.map((v, i) => (
+                                                <li key={i} className={PRIORITIES[v.priority.toUpperCase()]?.text.replace('text-', 'text-light-') || ''}>{v.msg}</li>
+                                            ))}
+                                        </ul>
+                                        <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
+                                    </div>
+                                )}
+                            </>
+                        ) : !isDisabled && (
+                            <span className="text-gray-300 text-xs pointer-events-none">
+                                {isEditMode ? (groupId > 0 ? `${groupId}班` : '使用可') : '空席'}
+                            </span>
+                        )}
+                        
+                        {isDisabled && isEditMode && <span className="text-gray-500 text-xs font-bold z-10">使用不可</span>}
+                    </div>
+                </div>
+            );
+        });
+
+        // --- メインアプリケーション: SeatingMaestro ---
+        function SeatingMaestro() {
+            // LocalStorage States
+            const [rows, setRows] = usePersistentState('rows', 5);
+            const [cols, setCols] = usePersistentState('cols', 6);
+            const [disabledSeats, setDisabledSeats] = usePersistentState('disabledSeats', []);
+            const [aisles, setAisles] = usePersistentState('aisles', []);
+            const [seatGroups, setSeatGroups] = usePersistentState('seatGroups', {});
+            const [students, setStudents] = usePersistentState('students', generateInitialStudents);
+            const [assignments, setAssignments] = usePersistentState('assignments', {});
+            const [history, setHistory] = usePersistentState('history', []);
+            
+            const defaultRules = {
+                individualRange: { enabled: true, priority: 'absolute', label: '個人の座席範囲指定を守る', params: {} },
+                genderBalance: { enabled: false, priority: 'optional', label: '男女交互配置（隣を異性に）', params: {} },
+                discussionBalance: { enabled: false, priority: 'preferred', label: '話し合いレベルを分散させる（得意な子を離す）', params: { highLevelThreshold: 4 } },
+                groupDiscussionBalance: { 
+                    enabled: false, 
+                    priority: 'preferred', 
+                    label: '班の話し合いレベルを均等にする', 
+                    params: { tolerance: 0.5 }
+                },
+                badPairs: { enabled: true, priority: 'absolute', label: '特定のペアを離す', params: {} },
+                historyAvoid: { 
+                    enabled: true, 
+                    priority: 'dynamic', 
+                    label: '過去の隣席ペアを避ける', 
+                    params: { absoluteLimit: 5, preferredLimit: 10, optionalLimit: 15 } 
+                },
+                historyFrontBackAvoid: { 
+                    enabled: false, 
+                    priority: 'dynamic', 
+                    label: '過去の前後ペアを避ける', 
+                    params: { absoluteLimit: 5, preferredLimit: 10, optionalLimit: 15 } 
+                },
+                historySeatAvoid: { 
+                    enabled: true, 
+                    priority: 'dynamic', 
+                    label: '過去と同じ場所を避ける', 
+                    params: { absoluteLimit: 5, preferredLimit: 10, optionalLimit: 15 } 
+                },
+                historyDistanceAvoid: {
+                    enabled: false,
+                    priority: 'preferred',
+                    label: '前回の席から一定距離離す',
+                    params: { minDistance: 2 }
+                },
+            };
+            const [rules, setRules] = usePersistentState('rules', defaultRules);
+
+            useEffect(() => {
+                setRules(prev => ({ ...defaultRules, ...prev }));
+            }, []);
+
+            // Local States
+            const [activeTab, setActiveTab] = useState('classroom');
+            const [isEditMode, setIsEditMode] = useState(false);
+            const [groupEditMode, setGroupEditMode] = useState(false);
+            const [currentGroupEditId, setCurrentGroupEditId] = useState(1);
+            const [isStatsOpen, setIsStatsOpen] = useState(false); 
+
+            const [selectedStudentId, setSelectedStudentId] = useState(null);
+            const [isSimulating, setIsSimulating] = useState(false);
+            const [simulationProgress, setSimulationProgress] = useState(0);
+            const [showViolations, setShowViolations] = useState(true);
+            const [editingStudentId, setEditingStudentId] = useState(null);
+            const [draggedSeatId, setDraggedSeatId] = useState(null);
+            const [modalConfig, setModalConfig] = useState(null);
+            const [previewHistoryId, setPreviewHistoryId] = useState(null);
+            const [viewMode, setViewMode] = useState('normal'); 
+            const [zoom, setZoom] = useState(1);
+
+            const handleZoomIn = () => setZoom(z => Math.min(z + 0.1, 2.0));
+            const handleZoomOut = () => setZoom(z => Math.max(z - 0.1, 0.5));
+            const handleZoomReset = () => setZoom(1);
+
+            // Undo/Redo Stacks
+            const [undoStack, setUndoStack] = useState([]);
+            const [redoStack, setRedoStack] = useState([]);
+
+            const saveToUndo = useCallback((current) => {
+                setUndoStack(prev => {
+                    const newStack = [...prev, current];
+                    if (newStack.length > 20) newStack.shift(); 
+                    return newStack;
+                });
+                setRedoStack([]);
+            }, []);
+
+            const handleUndo = useCallback(() => {
+                if (undoStack.length === 0) return;
+                const previous = undoStack[undoStack.length - 1];
+                setRedoStack(prev => [assignments, ...prev]);
+                setAssignments(previous);
+                setUndoStack(prev => prev.slice(0, -1));
+            }, [assignments, undoStack, setAssignments]);
+
+            const handleRedo = useCallback(() => {
+                if (redoStack.length === 0) return;
+                const next = redoStack[0];
+                setUndoStack(prev => [...prev, assignments]);
+                setAssignments(next);
+                setRedoStack(prev => prev.slice(1));
+            }, [assignments, redoStack, setAssignments]);
+
+            // --- Helpers ---
+            const getSeatId = useCallback((r, c) => `seat-${r}-${c}`, []);
+
+            const displayedAssignments = useMemo(() => {
+                if (previewHistoryId) {
+                    const target = history.find(h => h.id === previewHistoryId);
+                    return target ? target.assignments : assignments;
+                }
+                return assignments;
+            }, [previewHistoryId, history, assignments]);
+
+            const displayedRows = useMemo(() => {
+                if (previewHistoryId) {
+                    const target = history.find(h => h.id === previewHistoryId);
+                    return target ? (target.rows || rows) : rows;
+                }
+                return rows;
+            }, [previewHistoryId, history, rows]);
+
+            const displayedCols = useMemo(() => {
+                if (previewHistoryId) {
+                    const target = history.find(h => h.id === previewHistoryId);
+                    return target ? (target.cols || cols) : cols;
+                }
+                return cols;
+            }, [previewHistoryId, history, cols]);
+
+            const getSeatAttributes = useCallback((r, c) => {
+                const isBack = r >= displayedRows - 1;
+                let isAisle = c === 0 || c === displayedCols - 1;
+                if (aisles.includes(c)) isAisle = true;
+                if (aisles.includes(c - 1)) isAisle = true;
+                const isCenter = !isAisle && (c > 0 && c < displayedCols - 1);
+                const isTeacherFront = r === 0 && isCenter;
+                return { isBack, isAisle, isCenter, isTeacherFront, r, c };
+            }, [displayedRows, displayedCols, aisles]);
+
+            const getNeighbors = useCallback((r, c) => {
+                const neighbors = [];
+                if (c > 0 && !aisles.includes(c - 1)) neighbors.push(getSeatId(r, c - 1));
+                if (c < displayedCols - 1 && !aisles.includes(c)) neighbors.push(getSeatId(r, c + 1));
+                return neighbors.filter(sid => !disabledSeats.includes(sid));
+            }, [displayedCols, aisles, disabledSeats, getSeatId]);
+
+            const getFrontBackNeighbors = useCallback((r, c) => {
+                const neighbors = [];
+                if (r > 0) neighbors.push(getSeatId(r - 1, c));
+                if (r < displayedRows - 1) neighbors.push(getSeatId(r + 1, c));
+                return neighbors.filter(sid => !disabledSeats.includes(sid));
+            }, [displayedRows, disabledSeats, getSeatId]);
+
+            const classDiscussionAverage = useMemo(() => {
+                if (students.length === 0) return 0;
+                const sum = students.reduce((acc, s) => acc + (s.discussionLevel || 3), 0);
+                return sum / students.length;
+            }, [students]);
+
+            const groupStats = useMemo(() => {
+                if (!seatGroups || Object.keys(seatGroups).length === 0) return {};
+                const stats = {}; 
+                Object.entries(displayedAssignments).forEach(([seatId, studentId]) => {
+                    const groupId = seatGroups[seatId];
+                    if (groupId) {
+                        const student = students.find(s => s.id === studentId);
+                        if (student) {
+                            if (!stats[groupId]) stats[groupId] = { count: 0, sum: 0, members: [] };
+                            stats[groupId].count++;
+                            stats[groupId].sum += (student.discussionLevel || 3);
+                            stats[groupId].members.push(student);
+                        }
+                    }
+                });
+                Object.keys(stats).forEach(gid => {
+                    stats[gid].average = stats[gid].sum / stats[gid].count;
+                });
+                return stats;
+            }, [displayedAssignments, seatGroups, students]);
+
+            // 違反チェック
+            const checkViolations = useCallback((studentId, seatId, currentAssignments) => {
+                if (!studentId || !seatId) return [];
+                if (disabledSeats.includes(seatId)) return [];
+                const student = students.find(s => s.id === studentId);
+                if (!student) return [];
+                if (student.fixedSeat === seatId) return [];
+
+                const [_, rStr, cStr] = seatId.split('-');
+                const r = parseInt(rStr);
+                const c = parseInt(cStr);
+                const violations = [];
+
+                if (rules.individualRange.enabled && student.useRestriction) {
+                    const currentCoord = `${r}-${c}`;
+                    const allowed = student.allowedSeats || [];
+                    if (!allowed.includes(currentCoord)) {
+                        violations.push({ rule: 'individualRange', priority: rules.individualRange.priority, msg: `座席配置の指定範囲外です` });
+                    }
+                }
+
+                const neighborIds = getNeighbors(r, c);
+                const neighborStudents = neighborIds.map(nid => {
+                    const sid = currentAssignments[nid];
+                    return sid ? students.find(s => s.id === sid) : null;
+                }).filter(s => s !== null);
+
+                const frontBackIds = getFrontBackNeighbors(r, c);
+                const frontBackStudents = frontBackIds.map(nid => {
+                    const sid = currentAssignments[nid];
+                    return sid ? students.find(s => s.id === sid) : null;
+                }).filter(s => s !== null);
+
+                if (rules.genderBalance.enabled) {
+                    if (neighborStudents.some(ns => ns.gender === student.gender)) {
+                        violations.push({ rule: 'genderBalance', priority: rules.genderBalance.priority, msg: '隣が同性です' });
+                    }
+                }
+
+                if (rules.discussionBalance.enabled) {
+                    const threshold = rules.discussionBalance.params.highLevelThreshold || 4;
+                    if (student.discussionLevel >= threshold) {
+                        const allNeighbors = [...neighborStudents, ...frontBackStudents];
+                        const uniqueNeighbors = Array.from(new Map(allNeighbors.map(s => [s.id, s])).values());
+                        if (uniqueNeighbors.some(ns => ns.discussionLevel >= threshold)) {
+                            violations.push({ rule: 'discussionBalance', priority: rules.discussionBalance.priority, msg: `話し合い得意な児童(Lv${threshold}以上)が固まっています` });
+                        }
+                    }
+                }
+                
+                if (rules.groupDiscussionBalance.enabled && seatGroups[seatId]) {
+                    const groupId = seatGroups[seatId];
+                    const tolerance = rules.groupDiscussionBalance.params.tolerance || 0.5;
+                    let currentSum = student.discussionLevel || 3;
+                    let currentCount = 1;
+                    Object.entries(seatGroups).forEach(([sId, gId]) => {
+                        if (gId === groupId && sId !== seatId) {
+                            const otherStudentId = currentAssignments[sId];
+                            if (otherStudentId) {
+                                const other = students.find(s => s.id === otherStudentId);
+                                if (other) {
+                                    currentSum += (other.discussionLevel || 3);
+                                    currentCount++;
+                                }
+                            }
+                        }
+                    });
+                    const groupAvg = currentSum / currentCount;
+                    const diff = Math.abs(groupAvg - classDiscussionAverage);
+                    if (diff > tolerance) {
+                        violations.push({ rule: 'groupDiscussionBalance', priority: rules.groupDiscussionBalance.priority, msg: `班の平均Lv(${groupAvg.toFixed(1)})が全体平均から乖離しています` });
+                    }
+                }
+
+                if (rules.badPairs.enabled && student.badPairs && student.badPairs.length > 0) {
+                    const badNeighbor = neighborStudents.find(ns => student.badPairs.includes(ns.id));
+                    if (badNeighbor) {
+                        violations.push({ rule: 'badPairs', priority: rules.badPairs.priority, msg: `${badNeighbor.name}さんとのペア回避設定があります` });
+                    }
+                }
+                
+                if (history.length > 0) {
+                    if (rules.historyDistanceAvoid.enabled && history[0]) {
+                        const lastHistory = history[0];
+                        const pastSeatEntry = Object.entries(lastHistory.assignments).find(([_, sid]) => sid === studentId);
+                        if (pastSeatEntry) {
+                            const [pastSeatId, _] = pastSeatEntry;
+                            const parts = pastSeatId.split('-');
+                            if(parts.length >= 3) {
+                                const pr = parseInt(parts[1]);
+                                const pc = parseInt(parts[2]);
+                                const dist = Math.max(Math.abs(r - pr), Math.abs(c - pc));
+                                const minDistance = rules.historyDistanceAvoid.params.minDistance;
+                                if (dist < minDistance) {
+                                    violations.push({
+                                        rule: 'historyDistanceAvoid',
+                                        priority: rules.historyDistanceAvoid.priority,
+                                        msg: `前回から${minDistance}マス以上離れていません(距離:${dist})`
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    history.forEach((h, index) => {
+                        const generationsAgo = index + 1;
+                        const pastDate = h.date.split(' ')[0];
+                        const pastSeatEntry = Object.entries(h.assignments).find(([_, sid]) => sid === studentId);
+                        
+                        if (pastSeatEntry) {
+                            const [pastSeatId, _] = pastSeatEntry;
+                            const parts = pastSeatId.split('-');
+                            if(parts.length < 3) return;
+                            const pr = parseInt(parts[1]);
+                            const pc = parseInt(parts[2]);
+
+                            if (rules.historyAvoid.enabled) {
+                                const { absoluteLimit, preferredLimit, optionalLimit } = rules.historyAvoid.params;
+                                const leftSeat = `seat-${pr}-${pc-1}`;
+                                const rightSeat = `seat-${pr}-${pc+1}`;
+                                const pastNeighborIds = [];
+                                if (h.assignments[leftSeat]) pastNeighborIds.push(h.assignments[leftSeat]);
+                                if (h.assignments[rightSeat]) pastNeighborIds.push(h.assignments[rightSeat]);
+                                const conflictNeighbor = neighborStudents.find(ns => pastNeighborIds.includes(ns.id));
+                                if (conflictNeighbor) {
+                                    let priority = null;
+                                    if (generationsAgo <= absoluteLimit) priority = 'absolute';
+                                    else if (generationsAgo <= preferredLimit) priority = 'preferred';
+                                    else if (generationsAgo <= optionalLimit) priority = 'optional';
+                                    if (priority) {
+                                        violations.push({ rule: 'historyAvoid', priority: priority, generationsAgo: generationsAgo, msg: `${generationsAgo}回前(${pastDate})に${conflictNeighbor.name}と隣でした` });
+                                    }
+                                }
+                            }
+
+                            if (rules.historyFrontBackAvoid.enabled) {
+                                const { absoluteLimit, preferredLimit, optionalLimit } = rules.historyFrontBackAvoid.params;
+                                const frontSeat = `seat-${pr-1}-${pc}`;
+                                const backSeat = `seat-${pr+1}-${pc}`;
+                                const pastFBIds = [];
+                                if (h.assignments[frontSeat]) pastFBIds.push(h.assignments[frontSeat]);
+                                if (h.assignments[backSeat]) pastFBIds.push(h.assignments[backSeat]);
+                                const conflictFB = frontBackStudents.find(ns => pastFBIds.includes(ns.id));
+                                if (conflictFB) {
+                                    let priority = null;
+                                    if (generationsAgo <= absoluteLimit) priority = 'absolute';
+                                    else if (generationsAgo <= preferredLimit) priority = 'preferred';
+                                    else if (generationsAgo <= optionalLimit) priority = 'optional';
+                                    if (priority) {
+                                        violations.push({ rule: 'historyFrontBackAvoid', priority: priority, generationsAgo: generationsAgo, msg: `${generationsAgo}回前(${pastDate})に${conflictFB.name}と前後でした` });
+                                    }
+                                }
+                            }
+
+                            if (rules.historySeatAvoid.enabled) {
+                                const { absoluteLimit, preferredLimit, optionalLimit } = rules.historySeatAvoid.params;
+                                if (pastSeatId === seatId) {
+                                    let priority = null;
+                                    if (generationsAgo <= absoluteLimit) priority = 'absolute';
+                                    else if (generationsAgo <= preferredLimit) priority = 'preferred';
+                                    else if (generationsAgo <= optionalLimit) priority = 'optional';
+                                    if (priority) {
+                                        violations.push({ rule: 'historySeatAvoid', priority: priority, generationsAgo: generationsAgo, msg: `${generationsAgo}回前(${pastDate})と同じ席です` });
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                return violations;
+            }, [students, rules, getNeighbors, getFrontBackNeighbors, history, disabledSeats, seatGroups, classDiscussionAverage]);
+
+            const getAllViolations = useCallback((currentAssignments) => {
+                let allViolations = {};
+                Object.entries(currentAssignments).forEach(([seatId, studentId]) => {
+                    const v = checkViolations(studentId, seatId, currentAssignments);
+                    if (v.length > 0) allViolations[seatId] = v;
+                });
+                return allViolations;
+            }, [checkViolations]);
+
+            const currentViolations = useMemo(() => {
+                return getAllViolations(displayedAssignments);
+            }, [displayedAssignments, getAllViolations]);
+
+            const activeStudentId = useMemo(() => {
+                if (selectedStudentId) return selectedStudentId;
+                if (draggedSeatId) return assignments[draggedSeatId];
+                return null;
+            }, [selectedStudentId, draggedSeatId, assignments]);
+
+            const getPrediction = useCallback((targetSeatId) => {
+                if (!activeStudentId || isSimulating || previewHistoryId || isEditMode) return null;
+                if (disabledSeats.includes(targetSeatId)) return null;
+                const sourceSeatId = Object.keys(assignments).find(k => assignments[k] === activeStudentId);
+                if (sourceSeatId === targetSeatId) return null;
+                const targetStudentId = assignments[targetSeatId];
+                const studentAtTarget = targetStudentId ? students.find(s => s.id === targetStudentId) : null;
+                if (studentAtTarget && studentAtTarget.fixedSeat === targetSeatId) return null;
+
+                const nextAssignments = { ...assignments };
+                if (sourceSeatId) {
+                    if (targetStudentId) nextAssignments[sourceSeatId] = targetStudentId;
+                    else delete nextAssignments[sourceSeatId];
+                }
+                nextAssignments[targetSeatId] = activeStudentId;
+                let violations = checkViolations(activeStudentId, targetSeatId, nextAssignments);
+                if (targetStudentId && sourceSeatId) {
+                    violations = [...violations, ...checkViolations(targetStudentId, sourceSeatId, nextAssignments)];
+                }
+                
+                if (violations.length === 0) return 'safe';
+                const worst = violations.reduce((prev, curr) => {
+                    const pOrder = { 'absolute': 3, 'preferred': 2, 'optional': 1 };
+                    const prevScore = pOrder[prev.priority] || 0;
+                    const currScore = pOrder[curr.priority] || 0;
+                    return currScore > prevScore ? curr : prev;
+                });
+                return worst.priority;
+            }, [activeStudentId, assignments, disabledSeats, checkViolations, isSimulating, previewHistoryId, isEditMode, students]);
+
+            const seatScores = useMemo(() => {
+                if (!activeStudentId || isSimulating || previewHistoryId || isEditMode) return {};
+                const scores = {};
+                const sourceSeatId = Object.keys(assignments).find(k => assignments[k] === activeStudentId);
+                for(let r=0; r<rows; r++) {
+                    for(let c=0; c<cols; c++) {
+                        const targetSeatId = getSeatId(r, c);
+                        if (disabledSeats.includes(targetSeatId)) continue;
+                        if (targetSeatId === sourceSeatId) continue;
+                        const targetStudentId = assignments[targetSeatId];
+                        const studentAtTarget = targetStudentId ? students.find(s => s.id === targetStudentId) : null;
+                        if (studentAtTarget && studentAtTarget.fixedSeat === targetSeatId) continue;
+
+                        const nextAssignments = { ...assignments };
+                        if (sourceSeatId) {
+                            if (targetStudentId) nextAssignments[sourceSeatId] = targetStudentId;
+                            else delete nextAssignments[sourceSeatId];
+                        }
+                        nextAssignments[targetSeatId] = activeStudentId;
+                        let violations = checkViolations(activeStudentId, targetSeatId, nextAssignments);
+                        if (targetStudentId && sourceSeatId) {
+                            violations = [...violations, ...checkViolations(targetStudentId, sourceSeatId, nextAssignments)];
+                        }
+                        let deduction = 0;
+                        violations.forEach(v => {
+                            const p = PRIORITIES[v.priority.toUpperCase()];
+                            if (p) deduction += p.deduction;
+                            if(v.generationsAgo) deduction += (5 / v.generationsAgo);
+                        });
+                        scores[targetSeatId] = Math.max(0, Math.floor(100 - deduction));
+                    }
+                }
+                return scores;
+            }, [activeStudentId, assignments, rows, cols, disabledSeats, getSeatId, students, checkViolations, isSimulating, previewHistoryId, isEditMode]);
+
+            // Actions
+            const toggleStudentLock = useCallback((studentId) => {
+                setStudents(prev => prev.map(s => {
+                    if (s.id === studentId) {
+                        const currentSeatId = Object.keys(assignments).find(key => assignments[key] === studentId);
+                        const newFixedSeat = (s.fixedSeat === currentSeatId) ? null : currentSeatId;
+                        return { ...s, fixedSeat: newFixedSeat };
+                    }
+                    return s;
+                }));
+                setSelectedStudentId(null);
+            }, [assignments]);
+
+            const moveStudent = useCallback((sourceSeatId, targetSeatId) => {
+                if (previewHistoryId) return;
+                if (disabledSeats.includes(targetSeatId)) return;
+                const sourceStudentId = assignments[sourceSeatId];
+                const targetStudentId = assignments[targetSeatId];
+                if (!sourceStudentId && !targetStudentId) return;
+                if (sourceSeatId === targetSeatId) return;
+                const sourceStudent = sourceStudentId ? students.find(s => s.id === sourceStudentId) : null;
+                const targetStudent = targetStudentId ? students.find(s => s.id === targetStudentId) : null;
+                
+                if (sourceStudent?.fixedSeat === sourceSeatId) {
+                    setModalConfig({ type: 'alert', title: '移動不可', message: `${sourceStudent.name}さんは席が固定（ロック）されています。` });
+                    return;
+                }
+                if (targetStudent?.fixedSeat === targetSeatId) {
+                    setModalConfig({ type: 'alert', title: '移動不可', message: `${targetStudent.name}さんは席が固定（ロック）されています。` });
+                    return;
+                }
+                
+                saveToUndo(assignments);
+
+                setAssignments(prev => {
+                    const next = { ...prev };
+                    if (sourceStudentId) next[targetSeatId] = sourceStudentId; else delete next[targetSeatId];
+                    if (targetStudentId) next[sourceSeatId] = targetStudentId; else delete next[sourceSeatId];
+                    return next;
+                });
+            }, [assignments, disabledSeats, students, previewHistoryId, saveToUndo]);
+
+            const handleSeatClick = useCallback((seatId) => {
+                if (isSimulating || previewHistoryId) return;
+                
+                if (groupEditMode) {
+                    setSeatGroups(prev => {
+                        const next = { ...prev };
+                        if (next[seatId] === currentGroupEditId) {
+                            delete next[seatId];
+                        } else {
+                            next[seatId] = currentGroupEditId;
+                        }
+                        return next;
+                    });
+                    return;
+                }
+
+                if (isEditMode) {
+                    setDisabledSeats(prev => prev.includes(seatId) ? prev.filter(id => id !== seatId) : [...prev, seatId]);
+                    saveToUndo(assignments);
+                    setAssignments(prev => { const next = {...prev}; if(next[seatId]) delete next[seatId]; return next; });
+                    return;
+                }
+                if (disabledSeats.includes(seatId)) return;
+                if (!selectedStudentId) {
+                    const studentId = assignments[seatId];
+                    if (studentId) setSelectedStudentId(studentId);
+                } else {
+                    const sourceSeatId = Object.keys(assignments).find(key => assignments[key] === selectedStudentId);
+                    if (sourceSeatId) moveStudent(sourceSeatId, seatId);
+                    setSelectedStudentId(null);
+                }
+            }, [isSimulating, isEditMode, groupEditMode, currentGroupEditId, disabledSeats, assignments, selectedStudentId, moveStudent, previewHistoryId, saveToUndo, setSeatGroups]);
+
+            const handleDragStart = useCallback((e, seatId) => {
+                if (isSimulating || isEditMode || groupEditMode || disabledSeats.includes(seatId) || previewHistoryId) { e.preventDefault(); return; }
+                const studentId = assignments[seatId];
+                const student = students.find(s => s.id === studentId);
+                if (!student || student.fixedSeat === seatId) { e.preventDefault(); return; }
+                setDraggedSeatId(seatId);
+                e.dataTransfer.effectAllowed = "move";
+            }, [isSimulating, isEditMode, groupEditMode, disabledSeats, assignments, previewHistoryId, students]);
+            const handleDragOver = useCallback((e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }, []);
+            const handleDrop = useCallback((e, targetSeatId) => {
+                e.preventDefault();
+                if (draggedSeatId && !previewHistoryId) { moveStudent(draggedSeatId, targetSeatId); setDraggedSeatId(null); }
+            }, [draggedSeatId, moveStudent, previewHistoryId]);
+
+            const saveToHistory = () => {
+                const now = new Date();
+                const dateStr = `${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${now.getMinutes()}`;
+                setHistory(prev => [{ id: Date.now(), date: dateStr, assignments: { ...assignments }, rows, cols }, ...prev]);
+                setModalConfig({ type: 'alert', title: '保存完了', message: '現在の配置を履歴に保存しました。' });
+            };
+            const updateStudent = (id, field, value) => setStudents(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+            const toggleBadPair = (studentId, targetId) => setStudents(prev => prev.map(s => { if (s.id === studentId) { const currentPairs = s.badPairs || []; const newPairs = currentPairs.includes(targetId) ? currentPairs.filter(p => p !== targetId) : [...currentPairs, targetId]; return { ...s, badPairs: newPairs }; } return s; }));
+            
+            const handleReset = () => setModalConfig({ type: 'confirm', title: '配置のクリア', message: '現在の座席配置をすべてリセットしますか？この操作は取り消せません。', variant: 'danger', onConfirm: () => { saveToUndo(assignments); setAssignments({}); setModalConfig(null); }});
+            
+            const handleStudentDelete = (s) => setModalConfig({ type: 'confirm', title: '児童の削除', message: `${s.name} さんを名簿から削除しますか？`, variant: 'danger', onConfirm: () => { setStudents(prev => prev.filter(st => st.id !== s.id)); saveToUndo(assignments); setAssignments(prev => { const next = {...prev}; Object.keys(next).forEach(key => { if (next[key] === s.id) delete next[key]; }); return next; }); setModalConfig(null); }});
+            const handleHistoryRestore = (h) => setModalConfig({ type: 'confirm', title: '履歴の復元', message: `${h.date} の配置を復元しますか？現在の作業内容は上書きされます。`, onConfirm: () => { saveToUndo(assignments); setAssignments({...h.assignments}); setRows(h.rows || rows); setCols(h.cols || cols); setPreviewHistoryId(null); setModalConfig(null); }});
+            const handleHistoryDelete = (historyId) => setModalConfig({ type: 'confirm', title: '履歴の削除', message: 'この履歴を削除しますか？この操作は取り消せません。', variant: 'danger', onConfirm: () => { setHistory(prev => prev.filter(h => h.id !== historyId)); if (previewHistoryId === historyId) setPreviewHistoryId(null); setModalConfig(null); }});
+            
+            const handleFillRandom = () => { 
+                saveToUndo(assignments);
+                const validSeats = []; 
+                for(let r=0; r<rows; r++) for(let c=0; c<cols; c++) { const sid = getSeatId(r, c); if(!disabledSeats.includes(sid)) validSeats.push(sid); } 
+                const newAssign = {}; 
+                const shuffled = [...students].sort(() => Math.random() - 0.5); 
+                let seatIdx = 0; 
+                shuffled.forEach(s => { if (s.fixedSeat && validSeats.includes(s.fixedSeat)) newAssign[s.fixedSeat] = s.id; }); 
+                shuffled.forEach(s => { if (!s.fixedSeat) { while(seatIdx < validSeats.length && newAssign[validSeats[seatIdx]]) seatIdx++; if (seatIdx < validSeats.length) { newAssign[validSeats[seatIdx]] = s.id; seatIdx++; } } }); 
+                setAssignments(newAssign); 
+            };
+            
+            const handleFillNumberOrder = () => {
+                saveToUndo(assignments);
+                const validSeats = []; 
+                for(let r=0; r<rows; r++) {
+                    for(let c=0; c<cols; c++) {
+                        const sid = getSeatId(r, c);
+                        if(!disabledSeats.includes(sid)) validSeats.push(sid);
+                    }
+                }
+                validSeats.sort((a, b) => {
+                    const [, r1, c1] = a.split('-').map(Number);
+                    const [, r2, c2] = b.split('-').map(Number);
+                    if (c1 !== c2) return c2 - c1;
+                    return r1 - r2;
+                });
+                const newAssign = {}; 
+                students.forEach(s => { 
+                    if (s.fixedSeat && validSeats.includes(s.fixedSeat)) {
+                        newAssign[s.fixedSeat] = s.id; 
+                    }
+                }); 
+                let seatIdx = 0;
+                students.forEach((s) => { 
+                    if (!s.fixedSeat) { 
+                        while(seatIdx < validSeats.length && newAssign[validSeats[seatIdx]]) {
+                            seatIdx++;
+                        }
+                        if (seatIdx < validSeats.length) { 
+                            newAssign[validSeats[seatIdx]] = s.id; 
+                            seatIdx++; 
+                        } 
+                    } 
+                }); 
+                setAssignments(newAssign);
+            };
+            
+            const toggleAllowedSeat = useCallback((studentId, r, c) => {
+                setStudents(prev => prev.map(s => {
+                    if (s.id === studentId) {
+                        const coord = `${r}-${c}`;
+                        const currentList = Array.isArray(s.allowedSeats) ? s.allowedSeats : [];
+                        const newList = currentList.includes(coord) 
+                            ? currentList.filter(x => x !== coord) 
+                            : [...currentList, coord];
+                        return { ...s, allowedSeats: newList };
+                    }
+                    return s;
+                }));
+            }, [setStudents]);
+
+            const selectAllSeats = useCallback((studentId) => {
+                const allSeats = [];
+                for(let r=0; r<rows; r++) for(let c=0; c<cols; c++) allSeats.push(`${r}-${c}`);
+                setStudents(prev => prev.map(s => s.id === studentId ? { ...s, allowedSeats: allSeats } : s));
+            }, [rows, cols, setStudents]);
+
+            const deselectAllSeats = useCallback((studentId) => {
+                setStudents(prev => prev.map(s => s.id === studentId ? { ...s, allowedSeats: [] } : s));
+            }, [setStudents]);
+
+            const runAutoGeneration = () => {
+                if (Object.keys(assignments).length === 0 && students.length === 0) return;
+                saveToUndo(assignments);
+                setIsSimulating(true); setSimulationProgress(0);
+                
+                setTimeout(() => {
+                    let bestAssignments = {};
+                    const freeStudents = [];
+                    const validSeats = [];
+                    for(let r=0; r<rows; r++) { for(let c=0; c<cols; c++) { const sid = getSeatId(r, c); if (!disabledSeats.includes(sid)) validSeats.push(sid); }}
+                    const fixedTakenSeats = [];
+                    students.forEach(s => { if (s.fixedSeat && validSeats.includes(s.fixedSeat)) { bestAssignments[s.fixedSeat] = s.id; fixedTakenSeats.push(s.fixedSeat); } else { freeStudents.push(s); }});
+                    const freeSeats = validSeats.filter(sid => !fixedTakenSeats.includes(sid));
+                    for (let i = freeStudents.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [freeStudents[i], freeStudents[j]] = [freeStudents[j], freeStudents[i]]; }
+                    freeStudents.forEach((s, idx) => { if (idx < freeSeats.length) bestAssignments[freeSeats[idx]] = s.id; });
+                    const getAllViolationsLocal = (assign) => {
+                        let allV = {}; Object.entries(assign).forEach(([sid, stid]) => { const v = checkViolations(stid, sid, assign); if (v.length > 0) allV[sid] = v; }); return allV;
+                    };
+                    const calculateScore = (currentAssign) => {
+                        let score = 0;
+                        const violationsMap = getAllViolationsLocal(currentAssign);
+                        Object.values(violationsMap).forEach(violations => {
+                        violations.forEach(v => { let baseScore = 0; const p = PRIORITIES[v.priority.toUpperCase()]; if (p) baseScore = p.score; if (v.generationsAgo) { const recencyPenalty = Math.floor(1000 / v.generationsAgo); baseScore += recencyPenalty; } score += baseScore; });
+                        });
+                        return score;
+                    };
+                    let bestScore = calculateScore(bestAssignments);
+                    let currentAssignments = { ...bestAssignments };
+                    const maxIterations = 3000;
+                    let iteration = 0;
+                    const step = () => {
+                        if (iteration >= maxIterations) { setAssignments(bestAssignments); setIsSimulating(false); setSimulationProgress(100); return; }
+                        for (let k = 0; k < 50; k++) {
+                        iteration++;
+                        const allValidMutableSeats = validSeats.filter(sid => { const studentId = currentAssignments[sid]; return !studentId || !students.find(s=>s.id === studentId)?.fixedSeat; });
+                        if (allValidMutableSeats.length < 2) break;
+                        const seatA = allValidMutableSeats[Math.floor(Math.random() * allValidMutableSeats.length)];
+                        const seatB = allValidMutableSeats[Math.floor(Math.random() * allValidMutableSeats.length)];
+                        if (seatA === seatB) continue;
+                        const nextAssignments = { ...currentAssignments };
+                        const studentA = nextAssignments[seatA];
+                        const studentB = nextAssignments[seatB];
+                        if (studentA) nextAssignments[seatB] = studentA; else delete nextAssignments[seatB];
+                        if (studentB) nextAssignments[seatA] = studentB; else delete nextAssignments[seatA];
+                        const nextScore = calculateScore(nextAssignments);
+                        if (nextScore <= bestScore) { bestScore = nextScore; bestAssignments = { ...nextAssignments }; currentAssignments = nextAssignments; } else { if (Math.random() < 0.005) currentAssignments = nextAssignments; }
+                        }
+                        setSimulationProgress(Math.floor((iteration / maxIterations) * 100));
+                        if (iteration % 500 === 0) setAssignments({...bestAssignments});
+                        requestAnimationFrame(step);
+                    };
+                    step();
+                }, 100);
+            };
+
+            // ファイル保存・読み込み機能
+            const handleExportData = () => {
+                const data = {
+                    students, assignments, rules, rows, cols, 
+                    disabledSeats, aisles, seatGroups, history,
+                    version: 1,
+                    exportedAt: new Date().toISOString()
+                };
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `seating-data-${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const handleImportData = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.students) setStudents(data.students);
+                        if (data.assignments) setAssignments(data.assignments);
+                        if (data.rules) setRules(data.rules);
+                        if (data.rows) setRows(data.rows);
+                        if (data.cols) setCols(data.cols);
+                        if (data.disabledSeats) setDisabledSeats(data.disabledSeats);
+                        if (data.aisles) setAisles(data.aisles);
+                        if (data.seatGroups) setSeatGroups(data.seatGroups);
+                        if (data.history) setHistory(data.history);
+                        setModalConfig({ type: 'alert', title: '読み込み完了', message: 'ファイルからデータを復元しました。' });
+                    } catch (err) {
+                        setModalConfig({ type: 'alert', title: 'エラー', message: 'ファイルの読み込みに失敗しました。データ形式が正しいか確認してください。', variant: 'danger' });
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            return (
+                <div className="flex h-screen w-full bg-gray-100 font-sans text-gray-800 overflow-hidden">
+                    {/* Sidebar */}
+                    <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full overflow-hidden shadow-lg z-10 shrink-0">
+                        <div className="p-4 bg-slate-800 text-white flex items-center justify-between">
+                        <h1 className="font-bold text-lg flex items-center gap-2"><Brain className="w-6 h-6" /> 席替えマエストロ</h1>
+                        <div className="flex items-center gap-2">
+                            <HardDrive className="w-4 h-4 text-green-400" title="ブラウザ保存" />
+                            <div className="flex gap-1 bg-slate-700 rounded p-1">
+                                <button onClick={handleUndo} disabled={undoStack.length === 0} className={`p-1 rounded hover:bg-slate-600 ${undoStack.length === 0 ? 'opacity-30' : ''}`} title="元に戻す"><Undo2 className="w-4 h-4 text-white" /></button>
+                                <button onClick={handleRedo} disabled={redoStack.length === 0} className={`p-1 rounded hover:bg-slate-600 ${redoStack.length === 0 ? 'opacity-30' : ''}`} title="やり直し"><Redo2 className="w-4 h-4 text-white" /></button>
+                            </div>
+                        </div>
+                        </div>
+                        <div className="flex border-b border-gray-200">
+                        <button onClick={() => setActiveTab('classroom')} className={`flex-1 py-3 text-xs md:text-sm font-medium ${activeTab === 'classroom' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}><LayoutGrid className="w-4 h-4 mx-auto mb-1" />座席</button>
+                        <button onClick={() => setActiveTab('students')} className={`flex-1 py-3 text-xs md:text-sm font-medium ${activeTab === 'students' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}><Users className="w-4 h-4 mx-auto mb-1" />名簿</button>
+                        <button onClick={() => setActiveTab('rules')} className={`flex-1 py-3 text-xs md:text-sm font-medium ${activeTab === 'rules' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}><Settings className="w-4 h-4 mx-auto mb-1" />条件</button>
+                        <button onClick={() => setActiveTab('history')} className={`flex-1 py-3 text-xs md:text-sm font-medium ${activeTab === 'history' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}><History className="w-4 h-4 mx-auto mb-1" />履歴</button>
+                        </div>
+                        {/* Sidebar Content */}
+                        <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+                            {activeTab === 'classroom' && (
+                                <div className="space-y-6">
+                                <div className="bg-white p-4 rounded shadow-sm">
+                                    <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2"><LayoutGrid className="w-4 h-4" /> 教室サイズ</h3>
+                                    <div className="grid grid-cols-2 gap-4">
+                                    <div><label className="block text-xs text-gray-500 mb-1">行数</label><input type="number" value={rows} onChange={(e) => setRows(Number(e.target.value))} className="w-full border p-2 rounded" min="1" max="10" /></div>
+                                    <div><label className="block text-xs text-gray-500 mb-1">列数</label><input type="number" value={cols} onChange={(e) => setCols(Number(e.target.value))} className="w-full border p-2 rounded" min="1" max="10" /></div>
+                                    </div>
+                                </div>
+                                <div className="bg-white p-4 rounded shadow-sm">
+                                    <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2"><GripVertical className="w-4 h-4" /> 通路設定</h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {Array.from({length: cols-1}).map((_, i) => (
+                                            <button key={i} onClick={() => { setAisles(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]); }} className={`text-xs px-2 py-1 rounded border ${aisles.includes(i) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}>{i+1}列目の後</button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="bg-white p-4 rounded shadow-sm">
+                                    <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2"><Users2 className="w-4 h-4" /> 班（グループ）設定</h3>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" className="sr-only peer" checked={groupEditMode} onChange={(e) => { setGroupEditMode(e.target.checked); if(e.target.checked) setIsEditMode(false); }} />
+                                            <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:bg-green-600"></div>
+                                            <span className="ml-2 text-xs font-medium text-gray-900">班の配置設定</span>
+                                        </label>
+                                    </div>
+                                    {groupEditMode && (
+                                        <div className="bg-green-50 p-2 rounded border border-green-100 mb-2">
+                                            <p className="text-[10px] text-green-800 mb-2">番号を選んで座席をクリック</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {Array.from({length: 12}).map((_, i) => (
+                                                    <button 
+                                                        key={i+1} 
+                                                        onClick={() => setCurrentGroupEditId(i+1)}
+                                                        className={`w-6 h-6 rounded-full flex items-center justify-center text-xs border ${currentGroupEditId === i+1 ? 'bg-green-600 text-white border-green-700 ring-2 ring-green-200' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'}`}
+                                                    >
+                                                        {i+1}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="bg-white p-4 rounded shadow-sm">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <h3 className="font-bold text-gray-700 flex items-center gap-2"><Edit3 className="w-4 h-4" /> 座席編集</h3>
+                                        <label className="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" className="sr-only peer" checked={isEditMode} onChange={(e) => { setIsEditMode(e.target.checked); if(e.target.checked) setGroupEditMode(false); }} />
+                                            <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:bg-blue-600"></div>
+                                            <span className="ml-2 text-xs font-medium text-gray-900">編集モード</span>
+                                        </label>
+                                    </div>
+                                    <p className="text-xs text-gray-500">モードONで座席をクリックすると<br/>「使用不可」を切り替えられます。</p>
+                                </div>
+                                <div className="space-y-2 pt-4">
+                                    <button onClick={handleFillRandom} className="w-full py-2 bg-white border hover:bg-gray-50 text-gray-700 rounded text-sm flex items-center justify-center gap-2 shadow-sm"><RefreshCw className="w-4 h-4" /> ランダム配置</button>
+                                    <button onClick={handleFillNumberOrder} className="w-full py-2 bg-white border hover:bg-blue-50 text-blue-700 rounded text-sm flex items-center justify-center gap-2 shadow-sm"><ListOrdered className="w-4 h-4" /> 出席番号順配置</button>
+                                    <button onClick={handleReset} className="w-full py-2 bg-white border border-red-100 text-red-600 hover:bg-red-50 rounded text-sm shadow-sm">配置をクリア</button>
+                                </div>
+                                </div>
+                            )}
+                            
+                            {/* 名簿タブ */}
+                            {activeTab === 'students' && (
+                                <div className="space-y-4">
+                                <div className="flex justify-between items-center mb-2">
+                                    <h3 className="font-bold text-gray-700">児童一覧 ({students.length}名)</h3>
+                                    <button onClick={() => setStudents(prev => [...prev, { id: `s-${Date.now()}`, name: '新規児童', gender: 'M', badPairs: [], useRestriction: false, allowedSeats: [], academic: 3, discussionLevel: 3 }])} className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded flex items-center gap-1"><Plus className="w-3 h-3" /> 追加</button>
+                                </div>
+                                <div className="bg-white rounded shadow-sm border overflow-hidden">
+                                    <div className="grid grid-cols-12 gap-1 bg-gray-100 p-2 text-[10px] font-bold text-gray-600 border-b">
+                                        <div className="col-span-1 text-center">No.</div>
+                                        <div className="col-span-4">氏名</div>
+                                        <div className="col-span-2 text-center">性別</div>
+                                        <div className="col-span-2 text-center">話Lv</div>
+                                        <div className="col-span-3 text-center">操作</div>
+                                    </div>
+                                    <div className="divide-y"> 
+                                    {students.map((s, index) => (
+                                        <div key={s.id} className="grid grid-cols-12 gap-1 p-2 items-center hover:bg-gray-50 text-xs">
+                                            <div className="col-span-1 text-center font-bold text-gray-500">{index + 1}</div>
+                                            <div className="col-span-4">
+                                                <input 
+                                                    type="text" 
+                                                    value={s.name} 
+                                                    onChange={(e) => updateStudent(s.id, 'name', e.target.value)}
+                                                    className="w-full border rounded px-1 py-0.5 focus:border-blue-400 outline-none"
+                                                />
+                                            </div>
+                                            <div className="col-span-2 text-center">
+                                                <select 
+                                                    value={s.gender} 
+                                                    onChange={(e) => updateStudent(s.id, 'gender', e.target.value)}
+                                                    className={`w-full border rounded px-0 py-0.5 text-center ${s.gender === 'M' ? 'bg-blue-50 text-blue-700' : 'bg-pink-50 text-pink-700'}`}
+                                                >
+                                                    <option value="M">男</option>
+                                                    <option value="F">女</option>
+                                                </select>
+                                            </div>
+                                            <div className="col-span-2 flex justify-center">
+                                                <input 
+                                                    type="number" min="1" max="5" 
+                                                    value={s.discussionLevel} 
+                                                    onChange={(e) => updateStudent(s.id, 'discussionLevel', Number(e.target.value))}
+                                                    className="w-10 border rounded text-center"
+                                                />
+                                            </div>
+                                            <div className="col-span-3 flex justify-center gap-2">
+                                                <button 
+                                                    onClick={() => setEditingStudentId(s.id)} 
+                                                    className={`p-1 rounded hover:bg-gray-200 ${(s.useRestriction || s.badPairs.length > 0) ? 'text-indigo-600' : 'text-gray-400'}`}
+                                                    title="詳細設定"
+                                                >
+                                                    <Edit3 className="w-4 h-4" />
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleStudentDelete(s)} 
+                                                    className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                                    title="削除"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    </div>
+                                </div>
+                                </div>
+                            )}
+                            
+                            {/* ルールタブ */}
+                            {activeTab === 'rules' && (
+                                <div className="space-y-4">
+                                <h3 className="font-bold text-gray-700">自動生成条件</h3>
+                                {RULE_ORDER.map((key) => {
+                                    const rule = rules[key];
+                                    if (!rule) return null;
+                                    return (
+                                        <div key={key} className="border p-3 rounded-lg bg-white shadow-sm">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <label className="flex items-center gap-2 cursor-pointer select-none"><input type="checkbox" checked={rule.enabled} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, enabled: e.target.checked}}))} className="w-4 h-4 text-blue-600" /><span className={`text-sm font-bold ${rule.enabled ? 'text-gray-800' : 'text-gray-400'}`}>{rule.label}</span></label>
+                                            </div>
+                                            {rule.enabled && (
+                                                <div className="ml-6 space-y-2">
+                                                    {rule.priority !== 'dynamic' && (
+                                                        <div className="grid grid-cols-3 gap-1">
+                                                            {Object.values(PRIORITIES).map(p => (
+                                                                <button key={p.id} onClick={() => setRules(prev => ({...prev, [key]: {...rule, priority: p.id}}))} className={`text-[10px] py-1 px-2 rounded border transition-colors ${rule.priority === p.id ? `${p.color} text-white border-transparent` : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}>{p.label}</button>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {key === 'individualRange' && <p className="text-[10px] text-gray-400">※ 各児童の「名簿」タブ編集画面で範囲を設定してください</p>}
+                                                    {key === 'discussionBalance' && (
+                                                        <div className="text-xs flex items-center gap-2 bg-gray-50 p-2 rounded">
+                                                            <span className="text-gray-600">話し合いレベル</span>
+                                                            <input type="number" min="1" max="5" value={rule.params.highLevelThreshold || 4} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, params: { ...rule.params, highLevelThreshold: Number(e.target.value) }}}))} className="w-10 border rounded px-1 text-center" />
+                                                            <span className="text-gray-600">以上の児童同士を離す</span>
+                                                        </div>
+                                                    )}
+                                                    {key === 'groupDiscussionBalance' && (
+                                                        <div className="text-xs flex items-center gap-2 bg-gray-50 p-2 rounded">
+                                                            <span className="text-gray-600">全体平均とのズレ</span>
+                                                            <input type="number" min="0.1" max="2.0" step="0.1" value={rule.params.tolerance || 0.5} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, params: { ...rule.params, tolerance: Number(e.target.value) }}}))} className="w-12 border rounded px-1 text-center" />
+                                                            <span className="text-gray-600">以内を目指す</span>
+                                                        </div>
+                                                    )}
+                                                    {key === 'historyDistanceAvoid' && (
+                                                        <div className="text-xs flex items-center gap-2 bg-gray-50 p-2 rounded">
+                                                            <span className="text-gray-600">前回から</span>
+                                                            <input type="number" min="1" max="10" value={rule.params.minDistance} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, params: { ...rule.params, minDistance: Number(e.target.value) }}}))} className="w-10 border rounded px-1 text-center" />
+                                                            <span className="text-gray-600">マス以上離す</span>
+                                                        </div>
+                                                    )}
+                                                    {(key === 'historyAvoid' || key === 'historySeatAvoid' || key === 'historyFrontBackAvoid') && (
+                                                        <div className="bg-gray-50 p-2 rounded text-xs space-y-2">
+                                                            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500"></span><span className="font-bold text-red-700 w-16">ぜったい</span><span>過去</span><input type="number" min="0" max="20" value={rule.params.absoluteLimit} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, params: { ...rule.params, absoluteLimit: Number(e.target.value) }}}))} className="w-10 border rounded px-1 text-center" /><span>回分まで</span></div>
+                                                            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-orange-500"></span><span className="font-bold text-orange-700 w-16">なるべく</span><span>過去</span><input type="number" min="0" max="20" value={rule.params.preferredLimit} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, params: { ...rule.params, preferredLimit: Number(e.target.value) }}}))} className="w-10 border rounded px-1 text-center" /><span>回分まで</span></div>
+                                                            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-yellow-400"></span><span className="font-bold text-yellow-700 w-16">できれば</span><span>過去</span><input type="number" min="0" max="30" value={rule.params.optionalLimit} onChange={(e) => setRules(prev => ({...prev, [key]: {...rule, params: { ...rule.params, optionalLimit: Number(e.target.value) }}}))} className="w-10 border rounded px-1 text-center" /><span>回分まで</span></div>
+                                                            <p className="text-[10px] text-gray-400 pl-4">※ それ以前は考慮しません<br/>※ 直近ほどペナルティが重くなります</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                                </div>
+                            )}
+                            {/* 履歴・バックアップタブ */}
+                            {activeTab === 'history' && (
+                                <div className="space-y-4">
+                                    <div className="bg-white p-4 rounded shadow-sm">
+                                        <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-2"><HardDrive className="w-4 h-4 text-blue-600" /> データのバックアップ・復元</h3>
+                                        <p className="text-xs text-gray-500 mb-3">現在のすべてのデータ（名簿、設定、履歴）をファイルに保存します。保存したファイルを読み込むことで、いつでも続きから再開できます。</p>
+                                        <div className="flex gap-2">
+                                            <button onClick={handleExportData} className="flex-1 py-2 bg-blue-50 border border-blue-200 text-blue-700 rounded text-sm hover:bg-blue-100 flex items-center justify-center gap-2 font-bold"><Download className="w-4 h-4" /> ファイルに保存</button>
+                                            <label className="flex-1 py-2 bg-white border border-gray-300 text-gray-700 rounded text-sm hover:bg-gray-50 flex items-center justify-center gap-2 cursor-pointer font-bold">
+                                                <Upload className="w-4 h-4" /> ファイルから復元
+                                                <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white p-4 rounded shadow-sm text-center">
+                                        <button onClick={saveToHistory} className="w-full py-2 bg-green-600 text-white rounded font-bold hover:bg-green-700 flex items-center justify-center gap-2"><Save className="w-4 h-4" /> 現在の配置を履歴に保存</button>
+                                    </div>
+                                    <h3 className="font-bold text-gray-700 mt-4">保存済み履歴 ({history.length})</h3>
+                                    <div className="space-y-2">
+                                        {history.length === 0 && <p className="text-xs text-gray-400 text-center py-4">履歴はありません</p>}
+                                        {history.map((h, idx) => (
+                                            <div key={h.id} className={`bg-white p-3 rounded border shadow-sm ${previewHistoryId === h.id ? 'ring-2 ring-blue-400' : ''}`}>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="font-bold text-sm text-gray-800">#{history.length - idx} : {h.date}</span>
+                                                    <div className="flex gap-2">
+                                                        <button onClick={() => setPreviewHistoryId(previewHistoryId === h.id ? null : h.id)} className={`text-xs flex items-center gap-1 ${previewHistoryId === h.id ? 'text-orange-600 font-bold' : 'text-gray-500 hover:text-gray-800'}`}>{previewHistoryId === h.id ? <><EyeOff className="w-3 h-3"/> 閉じる</> : <><Eye className="w-3 h-3"/> 確認</>}</button>
+                                                        <button onClick={() => handleHistoryRestore(h)} className="text-xs text-blue-600 hover:underline font-medium">復元</button>
+                                                        <button onClick={() => handleHistoryDelete(h.id)} className="text-xs text-red-500 hover:text-red-700"><Trash2 className="w-3 h-3" /></button>
+                                                    </div>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500">配置人数: {Object.keys(h.assignments).length}名</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {/* Main Content */}
+                    <div className="flex-1 flex flex-col min-w-0 bg-slate-50 relative">
+                        {previewHistoryId && (
+                            <div className="bg-orange-600 text-white px-6 py-2 shadow-md flex items-center justify-between z-20">
+                                <div className="flex items-center gap-2 font-bold text-sm"><History className="w-5 h-5" /> 過去の履歴を表示中（プレビューモード）</div>
+                                <button onClick={() => setPreviewHistoryId(null)} className="bg-white text-orange-600 px-3 py-1 rounded text-xs font-bold hover:bg-orange-50">プレビューを終了</button>
+                            </div>
+                        )}
+
+                        <div className="bg-white border-b px-6 py-3 flex items-center justify-between shadow-sm z-10">
+                        <div>
+                            <div className="flex items-center gap-3">
+                                <h2 className="text-xl font-bold text-gray-800">教室配置プレビュー</h2>
+                                {/* AI実行ボタン */}
+                                <button 
+                                    onClick={runAutoGeneration} 
+                                    disabled={isSimulating || !!previewHistoryId} 
+                                    className={`px-4 py-1.5 rounded-full text-xs font-bold shadow-md transition-all flex items-center gap-2
+                                        ${isSimulating || previewHistoryId 
+                                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 active:scale-95'}`}
+                                >
+                                    {isSimulating ? <><Loader2 className="w-3 h-3 animate-spin"/> 思考中...</> : <><Brain className="w-3 h-3" /> AI席替え実行</>}
+                                </button>
+                                <span className="text-xs text-gray-500 ml-2">{isSimulating ? `(${simulationProgress}%)` : previewHistoryId ? '※ 履歴表示中' : `${Object.keys(assignments).length} / ${students.length} 名`}</span>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
+                                <button onClick={() => setViewMode('normal')} className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 ${viewMode === 'normal' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>通常</button>
+                                <button onClick={() => setViewMode('heatmap')} className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 ${viewMode === 'heatmap' ? 'bg-white shadow text-orange-600' : 'text-gray-500'}`}><BarChart3 className="w-3 h-3" /> 話し合いレベル</button>
+                            </div>
+                            
+                            <div className="flex items-center gap-1">
+                                <button onClick={handleZoomOut} className="p-1.5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600"><ZoomOut className="w-4 h-4"/></button>
+                                <button onClick={handleZoomReset} className="text-xs text-gray-500 font-mono w-8 text-center">{Math.round(zoom * 100)}%</button>
+                                <button onClick={handleZoomIn} className="p-1.5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600"><ZoomIn className="w-4 h-4"/></button>
+                            </div>
+                            
+                            <div className="flex items-center gap-2 text-xs bg-gray-100 p-1 rounded-lg">
+                                <button onClick={() => setShowViolations(!showViolations)} className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-1 ${showViolations ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}><AlertTriangle className="w-3 h-3" /> 違反を表示</button>
+                            </div>
+                        </div>
+                        </div>
+                        
+                        {/* Status Indicators (floating) */}
+                        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-none flex gap-2">
+                            {isEditMode && !previewHistoryId && <div className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs font-bold shadow-sm animate-pulse border border-yellow-200">座席編集モード中</div>}
+                            {groupEditMode && !previewHistoryId && <div className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-bold shadow-sm animate-pulse border border-green-200">班設定モード中</div>}
+                        </div>
+
+                        <div className={`flex-1 overflow-auto p-8 relative ${isStatsOpen ? 'pb-48' : 'pb-16'}`}>
+                        <div 
+                            className="min-w-max mx-auto relative transition-transform duration-200 ease-out origin-top"
+                            style={{ transform: `scale(${zoom})` }}
+                        >
+                            <div className="w-1/3 h-8 bg-green-800 rounded-b-lg shadow-md flex items-center justify-center text-white text-xs opacity-80 border-t-4 border-gray-300 mx-auto mb-12">教卓 (黒板)</div>
+                            <div className="flex flex-col gap-4 items-center">
+                                {Array.from({ length: displayedRows }).map((_, r) => (
+                                    <div key={`row-${r}`} className="flex">
+                                        {Array.from({ length: displayedCols }).map((_, c) => (
+                                            <Seat 
+                                                key={getSeatId(r, c)} r={r} c={c} seatId={getSeatId(r, c)}
+                                                student={students.find(s => s.id === displayedAssignments[getSeatId(r, c)])}
+                                                isDisabled={disabledSeats.includes(getSeatId(r, c))}
+                                                hasAisleRight={aisles.includes(c)}
+                                                isSelected={!!(displayedAssignments[getSeatId(r, c)] === selectedStudentId && displayedAssignments[getSeatId(r, c)])}
+                                                isDragSource={draggedSeatId === getSeatId(r, c)}
+                                                violations={currentViolations[getSeatId(r, c)] || []}
+                                                showViolations={showViolations}
+                                                isEditMode={isEditMode}
+                                                isSimulating={isSimulating}
+                                                isPreviewMode={!!previewHistoryId}
+                                                prediction={getPrediction(getSeatId(r, c))}
+                                                score={seatScores[getSeatId(r, c)]}
+                                                viewMode={viewMode}
+                                                groupId={seatGroups[getSeatId(r, c)]}
+                                                attendanceNumber={students.findIndex(s => s.id === displayedAssignments[getSeatId(r, c)]) + 1}
+                                                onClick={handleSeatClick} onDragStart={handleDragStart} onDragOver={handleDragOver} onDrop={handleDrop}
+                                            />
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                            
+                            {/* 選択中のアクションバー */}
+                            {selectedStudentId && !previewHistoryId && (
+                                <div 
+                                    className="fixed bottom-20 left-1/2 transform -translate-x-1/2 bg-white border border-gray-200 text-gray-800 px-6 py-3 rounded-full shadow-xl flex items-center gap-4 animate-bounce z-50 origin-center"
+                                    style={{ transform: `translate(-50%, 0) scale(${1/zoom})` }}
+                                >
+                                    <div className="flex items-center gap-2"><ArrowRightLeft className="w-5 h-5 text-blue-600" /><span className="font-bold">{students.find(s => s.id === selectedStudentId)?.name}</span><span className="text-xs text-gray-500">を選択中...</span></div>
+                                    <div className="h-6 w-px bg-gray-300"></div>
+                                    <button onClick={() => toggleStudentLock(selectedStudentId)} className={`flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded transition-colors ${students.find(s => s.id === selectedStudentId)?.fixedSeat ? 'bg-gray-200 text-gray-600 hover:bg-gray-300' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>{students.find(s => s.id === selectedStudentId)?.fixedSeat ? <><Unlock className="w-3 h-3"/> 固定解除</> : <><Lock className="w-3 h-3"/> この席に固定</>}</button>
+                                    <button onClick={() => setSelectedStudentId(null)} className="ml-2 text-gray-400 hover:text-gray-600 text-xs underline">キャンセル</button>
+                                </div>
+                            )}
+                        </div>
+                        </div>
+                        
+                        {/* 班ごとのデータ表示 (開閉式ボトムパネル) */}
+                        {(Object.keys(groupStats).length > 0) && (
+                            <div 
+                                className={`absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-30 transition-all duration-300 ease-in-out border-t border-gray-200 ${isStatsOpen ? 'h-48' : 'h-10'}`}
+                            >
+                                {/* トグルボタン（ヘッダー全体） */}
+                                <button 
+                                    onClick={() => setIsStatsOpen(!isStatsOpen)}
+                                    className="w-full h-10 flex items-center justify-between px-4 hover:bg-gray-50 transition-colors"
+                                >
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-xs font-bold text-gray-600 flex items-center gap-2">
+                                            <BarChart3 className="w-4 h-4" /> 
+                                            班ごとの話し合いレベル
+                                        </span>
+                                        <div className="flex items-center gap-2 text-xs">
+                                            <span className="text-gray-500">全体平均:</span>
+                                            <span className="font-bold text-gray-800">{classDiscussionAverage.toFixed(2)}</span>
+                                        </div>
+                                    </div>
+                                    {isStatsOpen ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronUp className="w-4 h-4 text-gray-400" />}
+                                </button>
+
+                                {/* グラフエリア (展開時のみ表示) */}
+                                <div className={`w-full h-38 px-4 pb-2 overflow-x-auto ${isStatsOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                                <div className="flex items-end gap-2 h-full relative px-2 pt-4">
+                                        {/* 基準線（全体平均） */}
+                                        <div 
+                                            className="absolute left-0 right-0 border-t-2 border-dashed border-gray-300 w-full z-0" 
+                                            style={{ bottom: `${(classDiscussionAverage - 1) / 4 * 80}%` }}
+                                        ></div>
+                                        
+                                        {Object.entries(groupStats).sort((a,b) => Number(a[0]) - Number(b[0])).map(([gid, stat]) => {
+                                            const diff = stat.average - classDiscussionAverage;
+                                            const tolerance = rules.groupDiscussionBalance.params.tolerance || 0.5;
+                                            const isOut = Math.abs(diff) > tolerance;
+                                            const heightPercent = Math.max(10, Math.min(100, (stat.average - 1) / 4 * 100));
+                                            let barColor = isOut ? (diff > 0 ? 'bg-red-400' : 'bg-blue-600') : 'bg-green-400';
+
+                                            return (
+                                                <div key={gid} className="flex flex-col items-center justify-end h-32 flex-1 min-w-[3rem] relative group/bar z-10">
+                                                    <span className={`text-[10px] font-bold mb-1 ${isOut ? 'text-red-600' : 'text-gray-600'}`}>
+                                                        {stat.average.toFixed(1)}
+                                                    </span>
+                                                    <div 
+                                                        className={`w-full max-w-[30px] rounded-t transition-all duration-500 relative ${barColor}`}
+                                                        style={{ height: `${heightPercent}%` }}
+                                                    ></div>
+                                                    <span className="text-[10px] font-bold text-gray-500 mt-1 bg-white px-1 border rounded">{gid}班</span>
+                                                    <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[10px] p-1 rounded opacity-0 group-hover/bar:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-lg">
+                                                        {stat.count}名 (合計:{stat.sum})
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 汎用モーダル */}
+                    {modalConfig && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[110]">
+                            <div className="bg-white rounded-lg p-6 w-full max-w-sm shadow-xl animate-in fade-in zoom-in duration-200">
+                                <div className="flex items-center gap-3 mb-4">{modalConfig.variant === 'danger' ? <div className="p-2 bg-red-100 rounded-full text-red-600"><AlertOctagon className="w-6 h-6" /></div> : <div className="p-2 bg-blue-100 rounded-full text-blue-600"><Info className="w-6 h-6" /></div>}<h3 className="text-lg font-bold text-gray-800">{modalConfig.title}</h3></div>
+                                <p className="text-gray-600 mb-6 text-sm leading-relaxed">{modalConfig.message}</p>
+                                <div className="flex justify-end gap-3">
+                                    {modalConfig.type === 'confirm' && <button onClick={() => setModalConfig(null)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm font-medium">キャンセル</button>}
+                                    <button onClick={modalConfig.onConfirm || (() => setModalConfig(null))} className={`px-4 py-2 rounded text-white text-sm font-medium shadow-sm ${modalConfig.variant === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>{modalConfig.type === 'confirm' ? '実行する' : 'OK'}</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Edit Modal */}
+                    {editingStudentId && (
+                        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
+                            {(() => {
+                                const s = students.find(st => st.id === editingStudentId);
+                                return s ? (
+                                    <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-xl">
+                                        <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-bold">児童情報編集: {s.name}</h3><button onClick={() => setEditingStudentId(null)}><XCircle className="w-6 h-6 text-gray-400 hover:text-gray-600" /></button></div>
+                                        <div className="space-y-4">
+                                            <div className="grid grid-cols-2 gap-4"><div><label className="block text-xs text-gray-500 mb-1">氏名</label><input type="text" value={s.name} onChange={(e) => updateStudent(s.id, 'name', e.target.value)} className="w-full border p-2 rounded" /></div><div><label className="block text-xs text-gray-500 mb-1">性別</label><select value={s.gender} onChange={(e) => updateStudent(s.id, 'gender', e.target.value)} className="w-full border p-2 rounded"><option value="M">男</option><option value="F">女</option></select></div></div>
+                                            <div>
+                                                <label className="block text-xs text-gray-500 mb-1 flex items-center gap-2">話し合いレベル (1: 苦手 〜 5: 得意) <span className="bg-orange-100 text-orange-700 px-1 rounded text-[10px]">Lv.{s.discussionLevel}</span></label>
+                                                <input type="range" min="1" max="5" value={s.discussionLevel || 3} onChange={(e) => updateStudent(s.id, 'discussionLevel', Number(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" />
+                                                <div className="flex justify-between text-[10px] text-gray-400 mt-1"><span>苦手</span><span>普通</span><span>得意</span></div>
+                                            </div>
+                                            <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100">
+                                                <h4 className="font-bold text-sm text-indigo-800 mb-3 flex items-center gap-2"><MapPin className="w-4 h-4" /> 座席配置の制限</h4>
+                                                <div className="flex items-center gap-4 mb-3"><label className="flex items-center gap-2 cursor-pointer"><input type="radio" name="restriction" checked={!s.useRestriction} onChange={() => updateStudent(s.id, 'useRestriction', false)} className="text-indigo-600 focus:ring-indigo-500" /><span className="text-sm">制限なし</span></label><label className="flex items-center gap-2 cursor-pointer"><input type="radio" name="restriction" checked={s.useRestriction} onChange={() => updateStudent(s.id, 'useRestriction', true)} className="text-indigo-600 focus:ring-indigo-500" /><span className="text-sm font-bold text-indigo-700">制限あり</span></label></div>
+                                                {s.useRestriction && (
+                                                    <div className="mt-3 bg-white p-3 rounded border border-indigo-200">
+                                                        <div className="flex justify-between items-center mb-2"><p className="text-xs text-gray-500">クリックして配置可能な席を選択（緑色=許可）</p><div className="flex gap-1"><button onClick={() => selectAllSeats(s.id)} className="text-[10px] bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded">全選択</button><button onClick={() => deselectAllSeats(s.id)} className="text-[10px] bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded">全解除</button></div></div>
+                                                        <div className="flex justify-center mb-2"><div className="w-1/2 py-1 bg-gray-200 rounded text-[10px] text-center text-gray-600 border border-gray-300">教卓 (前方)</div></div>
+                                                        <div className="flex flex-col gap-1 items-center overflow-x-auto pb-1">
+                                                            {Array.from({ length: rows }).map((_, r) => (
+                                                                <div key={r} className="flex gap-1">
+                                                                    {Array.from({ length: cols }).map((_, c) => {
+                                                                        const coord = `${r}-${c}`;
+                                                                        const isAllowed = s.allowedSeats?.includes(coord);
+                                                                        return <div key={coord} onClick={() => toggleAllowedSeat(s.id, r, c)} className={`w-6 h-6 rounded flex items-center justify-center text-[8px] cursor-pointer transition-colors border ${isAllowed ? 'bg-green-500 border-green-600 text-white' : 'bg-gray-100 border-gray-200 text-gray-400 hover:bg-gray-200'}`} title={`${r+1}-${c+1}`}>{isAllowed ? <CheckSquare className="w-3 h-3" /> : <Square className="w-3 h-3" />}</div>;
+                                                                    })}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="border-t pt-4"><label className="block text-sm font-bold text-gray-700 mb-2">離したい児童（ペアNG）</label><div className="h-40 overflow-y-auto border rounded p-2 bg-gray-50 grid grid-cols-2 gap-2">{students.filter(st => st.id !== s.id).map(target => (<label key={target.id} className="flex items-center gap-2 text-xs p-1 hover:bg-gray-100 rounded cursor-pointer"><input type="checkbox" checked={s.badPairs?.includes(target.id)} onChange={() => toggleBadPair(s.id, target.id)} className="w-3 h-3" /><span>{target.name}</span></label>))}</div></div>
+                                        </div>
+                                        <div className="mt-6 flex justify-end"><button onClick={() => setEditingStudentId(null)} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">完了</button></div>
+                                    </div>
+                                ) : null;
+                            })()}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // アプリケーションの描画
+        const root = createRoot(document.getElementById('root'));
+        root.render(<SeatingMaestro />);
+    </script>
+</body>
+</html>
